@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Сравнение таблиц JSON с общей таблицей со всеми строками</title>
+  <style>
+    textarea {
+      width: 45%;
+      height: 150px;
+      margin: 10px 2%;
+      font-family: monospace;
+    }
+    button {
+      display: block;
+      margin: 15px auto;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .tables-container {
+      display: flex;
+      justify-content: space-around;
+      margin-top: 20px;
+      gap: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      min-width: 300px;
+      max-width: 45vw;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #aaa;
+      padding: 6px 8px;
+      text-align: left;
+      max-width: 150px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    th {
+      background: #ddd;
+    }
+    .diff-cell {
+      background-color: #ffc2c2; /* светло-красный - различия в полях */
+    }
+    .same-cell {
+      background-color: #d2f8d2; /* светло-зеленый - совпадение полей */
+    }
+    #comparisonResult, #statusResult, #globalResult, #allRowsResult {
+      margin-top: 30px;
+      max-width: 95vw;
+      overflow-x: auto;
+    }
+    #comparisonResult table, #statusResult table, #globalResult table, #allRowsResult table {
+      width: 100%;
+    }
+    caption {
+      font-weight: bold;
+      margin-bottom: 10px;
+      font-size: 18px;
+    }
+    /* Статусы строк */
+    .status-added {
+      background-color: #d2f8d2; /* зеленый - добавлено */
+      font-weight: bold;
+    }
+    .status-deleted {
+      background-color: #ffc2c2; /* красный - удалено */
+      font-weight: bold;
+    }
+    .status-modified {
+      background-color: #fff0b3; /* желтый - изменено */
+      font-weight: bold;
+    }
+    .status-unchanged {
+      background-color: #fff; /* белый - не изменено */
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Сравнение двух JSON Таблиц с общей таблицей всех строк</h1>
+
+  <textarea id="json1" placeholder="Вставьте JSON таблицы 1 (массив объектов)"></textarea>
+  <textarea id="json2" placeholder="Вставьте JSON таблицы 2 (массив объектов)"></textarea>
+
+  <button onclick="processAndCompare()">Показать таблицы и сравнить</button>
+
+  <div class="tables-container">
+    <div>
+      <h3>Таблица 1</h3>
+      <div id="table1"></div>
+    </div>
+    <div>
+      <h3>Таблица 2</h3>
+      <div id="table2"></div>
+    </div>
+  </div>
+
+  <div id="comparisonResult"></div>
+
+  <div id="statusResult"></div>
+
+  <div id="globalResult"></div>
+
+  <div id="allRowsResult"></div>
+
+  <script>
+    function parseJSON(text) {
+      try {
+        const json = JSON.parse(text);
+        if (!Array.isArray(json)) {
+          return { error: 'JSON должен быть массивом объектов' };
+        }
+        return { data: json };
+      } catch (e) {
+        return { error: 'Ошибка парсинга JSON: ' + e.message };
+      }
+    }
+
+    function getAllKeys(arr) {
+      const keys = new Set();
+      arr.forEach(obj => {
+        if (obj && typeof obj === 'object') {
+          Object.keys(obj).forEach(k => keys.add(k));
+        }
+      });
+      return Array.from(keys);
+    }
+
+    function createTable(data, keys) {
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      const trHead = document.createElement('tr');
+
+      keys.forEach(k => {
+        const th = document.createElement('th');
+        th.textContent = k;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      data.forEach(row => {
+        const tr = document.createElement('tr');
+        keys.forEach(k => {
+          const td = document.createElement('td');
+          let val = (row && k in row) ? row[k] : '';
+          if (val === null) val = 'null';
+          else if (val === undefined) val = '';
+          else if (typeof val === 'object') val = JSON.stringify(val);
+          else val = val.toString();
+          td.textContent = val;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      return table;
+    }
+
+    function valuesEqual(a, b) {
+      if (a === b) return true;
+      if (typeof a === 'number' && typeof b === 'string') return a.toString() === b;
+      if (typeof b === 'number' && typeof a === 'string') return b.toString() === a;
+      return false;
+    }
+
+    function deepEqualObjects(obj1, obj2, keys) {
+      for (const key of keys) {
+        const val1Raw = obj1 && key in obj1 ? obj1[key] : '';
+        let val1 = (val1Raw === null) ? 'null' :
+                   (val1Raw === undefined) ? '' :
+                   (typeof val1Raw === 'object') ? JSON.stringify(val1Raw) :
+                   val1Raw.toString();
+
+        const val2Raw = obj2 && key in obj2 ? obj2[key] : '';
+        let val2 = (val2Raw === null) ? 'null' :
+                   (val2Raw === undefined) ? '' :
+                   (typeof val2Raw === 'object') ? JSON.stringify(val2Raw) :
+                   val2Raw.toString();
+
+        if (!valuesEqual(val1, val2)) return false;
+      }
+      return true;
+    }
+
+    function processAndCompare() {
+      const container1 = document.getElementById('table1');
+      const container2 = document.getElementById('table2');
+      const resultContainer = document.getElementById('comparisonResult');
+      const statusContainer = document.getElementById('statusResult');
+      const globalContainer = document.getElementById('globalResult');
+      const allRowsContainer = document.getElementById('allRowsResult');
+
+      container1.innerHTML = '';
+      container2.innerHTML = '';
+      resultContainer.innerHTML = '';
+      statusContainer.innerHTML = '';
+      globalContainer.innerHTML = '';
+      allRowsContainer.innerHTML = '';
+
+      const input1 = document.getElementById('json1').value.trim();
+      const input2 = document.getElementById('json2').value.trim();
+
+      if (!input1 || !input2) {
+        resultContainer.textContent = 'Пожалуйста, вставьте JSON в оба поля.';
+        return;
+      }
+
+      const parsed1 = parseJSON(input1);
+      if (parsed1.error) {
+        resultContainer.textContent = 'Ошибка в JSON таблицы 1:\n' + parsed1.error;
+        return;
+      }
+      const parsed2 = parseJSON(input2);
+      if (parsed2.error) {
+        resultContainer.textContent = 'Ошибка в JSON таблицы 2:\n' + parsed2.error;
+        return;
+      }
+
+      const keys1 = getAllKeys(parsed1.data);
+      const keys2 = getAllKeys(parsed2.data);
+      const allKeysSet = new Set([...keys1, ...keys2]);
+      const allKeys = Array.from(allKeysSet);
+
+      const tableEl1 = createTable(parsed1.data, allKeys);
+      const tableEl2 = createTable(parsed2.data, allKeys);
+
+      container1.appendChild(tableEl1);
+      container2.appendChild(tableEl2);
+
+      // Сравнение по индексам (как раньше)
+      const rowsCount = Math.max(parsed1.data.length, parsed2.data.length);
+
+      // Таблица сравнения по индексам
+      const compTable = document.createElement('table');
+      compTable.border = '1';
+
+      const thead = document.createElement('thead');
+      const trHead = document.createElement('tr');
+      trHead.appendChild(document.createElement('th'));
+      allKeys.forEach(k => {
+        const th1 = document.createElement('th');
+        th1.textContent = k + ' (Таблица 1)';
+        trHead.appendChild(th1);
+        const th2 = document.createElement('th');
+        th2.textContent = k + ' (Таблица 2)';
+        trHead.appendChild(th2);
+      });
+      thead.appendChild(trHead);
+      compTable.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+
+      const rowStatuses = [];
+
+      for (let i = 0; i < rowsCount; i++) {
+        const tr = document.createElement('tr');
+        const tdIndex = document.createElement('td');
+        tdIndex.textContent = i + 1;
+        tdIndex.style.fontWeight = 'bold';
+        tr.appendChild(tdIndex);
+
+        const row1 = parsed1.data[i];
+        const row2 = parsed2.data[i];
+
+        let status = '';
+        if (row1 === undefined && row2 !== undefined) {
+          status = 'added';
+        } else if (row1 !== undefined && row2 === undefined) {
+          status = 'deleted';
+        } else if (row1 !== undefined && row2 !== undefined) {
+          let changed = false;
+          for (const key of allKeys) {
+            const val1Raw = key in row1 ? row1[key] : '';
+            let val1 = (val1Raw === null) ? 'null' :
+                       (val1Raw === undefined) ? '' :
+                       (typeof val1Raw === 'object') ? JSON.stringify(val1Raw) :
+                       val1Raw.toString();
+
+            const val2Raw = key in row2 ? row2[key] : '';
+            let val2 = (val2Raw === null) ? 'null' :
+                       (val2Raw === undefined) ? '' :
+                       (typeof val2Raw === 'object') ? JSON.stringify(val2Raw) :
+                       val2Raw.toString();
+
+            if (!valuesEqual(val1, val2)) {
+              changed = true;
+              break;
+            }
+          }
+          status = changed ? 'modified' : 'unchanged';
+        }
+        rowStatuses.push(status);
+
+        allKeys.forEach(key => {
+          const val1Raw = row1 && key in row1 ? row1[key] : '';
+          let val1 = (val1Raw === null) ? 'null' :
+                     (val1Raw === undefined) ? '' :
+                     (typeof val1Raw === 'object') ? JSON.stringify(val1Raw) :
+                     val1Raw.toString();
+
+          const val2Raw = row2 && key in row2 ? row2[key] : '';
+          let val2 = (val2Raw === null) ? 'null' :
+                     (val2Raw === undefined) ? '' :
+                     (typeof val2Raw === 'object') ? JSON.stringify(val2Raw) :
+                     val2Raw.toString();
+
+          const td1 = document.createElement('td');
+          const td2 = document.createElement('td');
+          td1.textContent = val1;
+          td2.textContent = val2;
+
+          if (valuesEqual(val1, val2)) {
+            td1.classList.add('same-cell');
+            td2.classList.add('same-cell');
+          } else {
+            td1.classList.add('diff-cell');
+            td2.classList.add('diff-cell');
+          }
+
+          tr.appendChild(td1);
+          tr.appendChild(td2);
+        });
+
+        tbody.appendChild(tr);
+      }
+      compTable.appendChild(tbody);
+
+      const caption = document.createElement('caption');
+      caption.textContent = 'Сравнение строк таблиц по индексам и ключам';
+      compTable.prepend(caption);
+      resultContainer.appendChild(compTable);
+
+      // Таблица статусов по индексам
+      const statusTable = document.createElement('table');
+      statusTable.border = '1';
+      const statusThead = document.createElement('thead');
+      const trStatusHead = document.createElement('tr');
+      ['№', 'Строка в Таблице 1', 'Строка в Таблице 2', 'Статус'].forEach(text => {
+        const th = document.createElement('th');
+        th.textContent = text;
+        trStatusHead.appendChild(th);
+      });
+      statusThead.appendChild(trStatusHead);
+      statusTable.appendChild(statusThead);
+
+      const statusTbody = document.createElement('tbody');
+
+      for (let i = 0; i < rowsCount; i++) {
+        const tr = document.createElement('tr');
+
+        const tdIndex = document.createElement('td');
+        tdIndex.textContent = i + 1;
+        tr.appendChild(tdIndex);
+
+        let row1 = parsed1.data[i];
+        let strRow1 = '';
+        if (row1 === undefined) {
+          strRow1 = '—';
+        } else {
+          strRow1 = allKeys.map(k => {
+            const val = (k in row1) ? row1[k] : '';
+            if (val === null) return `${k}: null`;
+            if (val === undefined) return `${k}:`;
+            if (typeof val === 'object') return `${k}: ${JSON.stringify(val)}`;
+            return `${k}: ${val}`;
+          }).join(', ');
+        }
+        const tdRow1 = document.createElement('td');
+        tdRow1.textContent = strRow1;
+        tr.appendChild(tdRow1);
+
+        let row2 = parsed2.data[i];
+        let strRow2 = '';
+        if (row2 === undefined) {
+          strRow2 = '—';
+        } else {
+          strRow2 = allKeys.map(k => {
+            const val = (k in row2) ? row2[k] : '';
+            if (val === null) return `${k}: null`;
+            if (val === undefined) return `${k}:`;
+            if (typeof val === 'object') return `${k}: ${JSON.stringify(val)}`;
+            return `${k}: ${val}`;
+          }).join(', ');
+        }
+        const tdRow2 = document.createElement('td');
+        tdRow2.textContent = strRow2;
+        tr.appendChild(tdRow2);
+
+        const tdStatus = document.createElement('td');
+        let className = '';
+        let statusText = '';
+        switch(rowStatuses[i]) {
+          case 'added':
+            className = 'status-added';
+            statusText = 'Добавлено';
+            break;
+          case 'deleted':
+            className = 'status-deleted';
+            statusText = 'Удалено';
+            break;
+          case 'modified':
+            className = 'status-modified';
+            statusText = 'Изменено';
+            break;
+          case 'unchanged':
+            className = 'status-unchanged';
+            statusText = 'Не изменено';
+            break;
+          default:
+            statusText = '—';
+        }
+        tdStatus.textContent = statusText;
+        tdStatus.classList.add(className);
+        tr.appendChild(tdStatus);
+
+        statusTbody.appendChild(tr);
+      }
+      statusTable.appendChild(statusTbody);
+
+      const statusCaption = document.createElement('caption');
+      statusCaption.textContent = 'Итоговый анализ строк и их статус по индексам';
+      statusTable.prepend(statusCaption);
+      statusContainer.appendChild(statusTable);
+
+      // --- Общая таблица со всеми строками и колонкой "Таблица" ---
+
+      // Ключ для объединения — первый найденный ключ
+      const keyForJoin = allKeys[0];
+      if (!keyForJoin) {
+        const p = document.createElement('p');
+        p.style.color = 'red';
+        p.textContent = 'Невозможно построить общую таблицу, нет ключей для объединения.';
+        allRowsContainer.appendChild(p);
+        return;
+      }
+
+      // Создаём Map для быстрой проверки строк по ключу в обеих таблицах
+      const map1 = new Map();
+      parsed1.data.forEach(row => {
+        if (row && row[keyForJoin] !== undefined && row[keyForJoin] !== null) {
+          map1.set(row[keyForJoin].toString(), row);
+        }
+      });
+      const map2 = new Map();
+      parsed2.data.forEach(row => {
+        if (row && row[keyForJoin] !== undefined && row[keyForJoin] !== null) {
+          map2.set(row[keyForJoin].toString(), row);
+        }
+      });
+
+      // Множество всех ключей из обеих таблиц
+      const unionKeys = new Set([...map1.keys(), ...map2.keys()]);
+
+      // Создаем таблицу
+      const allRowsTable = document.createElement('table');
+      allRowsTable.border = '1';
+
+      const allRowsThead = document.createElement('thead');
+      const trAllRowsHead = document.createElement('tr');
+
+      const thTable = document.createElement('th');
+      thTable.textContent = 'Таблица';
+      trAllRowsHead.appendChild(thTable);
+
+      allKeys.forEach(k => {
+        const th = document.createElement('th');
+        th.textContent = k;
+        trAllRowsHead.appendChild(th);
+      });
+
+      const thStatus = document.createElement('th');
+      thStatus.textContent = 'Статус';
+      trAllRowsHead.appendChild(thStatus);
+
+      allRowsThead.appendChild(trAllRowsHead);
+      allRowsTable.appendChild(allRowsThead);
+
+      const allRowsTbody = document.createElement('tbody');
+
+      // Добавим строки Таблицы 1:
+      map1.forEach((row1, key) => {
+        const row2 = map2.get(key);
+        let status = '';
+        if (row2 === undefined) {
+          status = 'deleted'; // вторая таблица нет
+        } else {
+          const eq = deepEqualObjects(row1, row2, allKeys);
+          status = eq ? 'unchanged' : 'modified';
+        }
+
+        const tr = document.createElement('tr');
+
+        // Колонка Таблица = 1
+        const tdTable = document.createElement('td');
+        tdTable.textContent = '1';
+        tr.appendChild(tdTable);
+
+        // Значения колонок
+        allKeys.forEach(k => {
+          const valRaw = k in row1 ? row1[k] : '';
+          let val = (valRaw === null) ? 'null' :
+                    (valRaw === undefined) ? '' :
+                    (typeof valRaw === 'object') ? JSON.stringify(valRaw) :
+                    valRaw.toString();
+
+          const td = document.createElement('td');
+          td.textContent = val;
+
+          if (row2) {
+            const val2Raw = k in row2 ? row2[k] : '';
+            let val2 = (val2Raw === null) ? 'null' :
+                       (val2Raw === undefined) ? '' :
+                       (typeof val2Raw === 'object') ? JSON.stringify(val2Raw) :
+                       val2Raw.toString();
+            if (!valuesEqual(val, val2)) {
+              td.classList.add('diff-cell');
+            } else {
+              td.classList.add('same-cell');
+            }
+          } else {
+            td.classList.add('diff-cell'); // в таблице 2 нет — подсветка
+          }
+          tr.appendChild(td);
+        });
+
+        // Статус
+        const tdStatus = document.createElement('td');
+        let className = '';
+        let statusText = '';
+        switch(status) {
+          case 'deleted':
+            className = 'status-deleted';
+            statusText = 'Удалено';
+            break;
+          case 'modified':
+            className = 'status-modified';
+            statusText = 'Изменено';
+            break;
+          case 'unchanged':
+            className = 'status-unchanged';
+            statusText = 'Не изменено';
+            break;
+        }
+        tdStatus.textContent = statusText;
+        tdStatus.classList.add(className);
+        tr.appendChild(tdStatus);
+
+        allRowsTbody.appendChild(tr);
+      });
+
+      // Добавим строки Таблицы 2, которых нет в Таблице 1 (т.е. добавленные)
+      map2.forEach((row2, key) => {
+        if (!map1.has(key)) {
+          const tr = document.createElement('tr');
+
+          const tdTable = document.createElement('td');
+          tdTable.textContent = '2';
+          tr.appendChild(tdTable);
+
+          allKeys.forEach(k => {
+            const valRaw = k in row2 ? row2[k] : '';
+            let val = (valRaw === null) ? 'null' :
+                      (valRaw === undefined) ? '' :
+                      (typeof valRaw === 'object') ? JSON.stringify(valRaw) :
+                      valRaw.toString();
+
+            const td = document.createElement('td');
+            td.textContent = val;
+            // Подсветить как добавлено
+            td.classList.add('diff-cell');
+            tr.appendChild(td);
+          });
+
+          const tdStatus = document.createElement('td');
+          tdStatus.textContent = 'Добавлено';
+          tdStatus.classList.add('status-added');
+          tr.appendChild(tdStatus);
+
+          allRowsTbody.appendChild(tr);
+        }
+      });
+
+      allRowsTable.appendChild(allRowsTbody);
+
+      const allRowsCaption = document.createElement('caption');
+      allRowsCaption.textContent = 'Общая таблица со всеми строками и статусом по таблицам';
+      allRowsTable.prepend(allRowsCaption);
+      allRowsContainer.appendChild(allRowsTable);
+    }
+  </script>
+
+</body>
+</html>
